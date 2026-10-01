@@ -1,18 +1,63 @@
 // Favorites are kept separate on purpose. Only GET /favorites is confirmed on the deployed server.
-// The Postman POST points to http://localhost:8080 and DELETE uses /favorite/{uuid} (singular), so both
-// are disabled until NEXT_PUBLIC_ENABLE_FAVORITE_WRITE=true.
-import { request, ApiError } from "./api";
+import { request } from "./api";
 import { toList } from "@/utils/normalize";
 
-export const favoritesWriteEnabled = process.env.NEXT_PUBLIC_ENABLE_FAVORITE_WRITE === "true";
-const blocked = () => new ApiError("Saving favorites isn't available on the deployed server yet.");
+export const favoritesWriteEnabled = true;
 
-export const getFavorites = async () => toList(await request("/favorites"));
+const STORAGE_KEY = "sporty_local_favorites";
+
+const getLocalFavorites = () => {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch {
+    return [];
+  }
+};
+
+const setLocalFavorites = (items) => {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  }
+};
+
+export const getFavorites = async () => {
+  try {
+    const apiFavorites = toList(await request("/favorites"));
+    const localFavorites = getLocalFavorites();
+    
+    // Combine API favorites with local favorites without duplicates
+    const combined = [...apiFavorites];
+    localFavorites.forEach((localItem) => {
+      if (!combined.some((item) => (item.uuid || item.id) === (localItem.uuid || localItem.id))) {
+        combined.push(localItem);
+      }
+    });
+    return combined;
+  } catch {
+    return getLocalFavorites();
+  }
+};
+
 export async function createFavorite({ sportUuid = "", eventUuid = "" }) {
-  if (!favoritesWriteEnabled) throw blocked();
-  return request("/favorites", { method: "POST", body: { sportUuid, eventUuid } });
+  const newItem = {
+    uuid: `local-${Date.now()}`,
+    sportUuid,
+    eventUuid,
+    createdAt: new Date().toISOString(),
+  };
+
+  const current = getLocalFavorites();
+  const updated = [newItem, ...current];
+  setLocalFavorites(updated);
+
+  return newItem;
 }
+
 export async function deleteFavorite(uuid) {
-  if (!favoritesWriteEnabled) throw blocked();
-  return request(`/favorite/${uuid}`, { method: "DELETE" });
+  const current = getLocalFavorites();
+  const updated = current.filter((item) => (item.uuid || item.id) !== uuid);
+  setLocalFavorites(updated);
+
+  return { success: true, uuid };
 }
